@@ -3,6 +3,7 @@
   (:require [clojure.set :as set]
             [clojure.string :as string]
             [datascript.core :as d]
+            [datascript.impl.entity :as de]
             [flatland.ordered.map :refer [ordered-map]]
             [logseq.common.defkeywords :refer [defkeywords]]
             [logseq.db.frontend.db-ident :as db-ident]
@@ -118,7 +119,10 @@
   "Built-in classes that are hidden in a few contexts like property values"
   #{:logseq.class/Page :logseq.class/Root :logseq.class/Asset})
 
+;; Helper fns
+;; ==========
 (defn get-structured-children
+  "Returns all children of a class"
   [db eid]
   (->>
    (d/q '[:find [?c ...]
@@ -130,8 +134,16 @@
         (:class-extends rules/rules))
    (remove #{eid})))
 
-;; Helper fns
-;; ==========
+(defn get-class-extends
+  "Returns all extends of a class"
+  [node]
+  (assert (de/entity? node) "get-class-extends `node` should be an entity")
+  (loop [extends (:logseq.property.class/extends node)
+         result #{}]
+    (if (seq extends)
+      (recur (set (mapcat :logseq.property.class/extends extends))
+             (into result extends))
+      result)))
 
 (defn create-user-class-ident-from-name
   "Creates a class :db/ident for a default user namespace.

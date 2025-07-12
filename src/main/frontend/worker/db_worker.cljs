@@ -33,6 +33,7 @@
             [frontend.worker.thread-atom]
             [frontend.worker.util :as worker-util]
             [goog.object :as gobj]
+            [lambdaisland.glogi :as log]
             [lambdaisland.glogi.console :as glogi-console]
             [logseq.common.util :as common-util]
             [logseq.db :as ldb]
@@ -249,7 +250,7 @@
               (not (number? last-gc-at))
               (> (- (common-util/time-ms) last-gc-at) (* 3 24 3600 1000))) ; 3 days ago
       (println :debug "gc current graph")
-      (doseq [db [sqlite-db client-ops-db]]
+      (doseq [db (if @*publishing? [sqlite-db] [sqlite-db client-ops-db])]
         (sqlite-gc/gc-kvs-table! db {:full-gc? full-gc?})
         (.exec db "VACUUM"))
       (d/transact! datascript-conn [{:db/ident :logseq.kv/graph-last-gc-at
@@ -468,9 +469,13 @@
           block (d/entity db id)]
       (if unlinked?
         (p/let [title (string/lower-case (:block/title block))
-                result (search-blocks repo title {:limit 3})]
-          (boolean (some (fn [b] (not= id (:db/id b))) result)))
-        (some? (first (:block/_refs block)))))))
+                result (search-blocks repo title {:limit 100})]
+          (boolean (some (fn [b]
+                           (let [block (d/entity db (:db/id b))]
+                             (and (not= id (:db/id block))
+                                  (not ((set (map :db/id (:block/refs block))) id))
+                                  (string/includes? (string/lower-case (:block/title block)) title)))) result)))
+        (some? (first (common-initial-data/get-block-refs db (:db/id block))))))))
 
 (def-thread-api :thread-api/get-block-parents
   [repo id depth]
@@ -837,6 +842,7 @@
                       (into {})
                       bean/->js)]
     (glogi-console/install!)
+    (log/set-levels {:glogi/root :info})
     (check-worker-scope!)
     (outliner-register-op-handlers!)
     (<ratelimit-file-writes!)

@@ -7,7 +7,6 @@
             [clojure.walk :as walk]
             [datascript.core :as d]
             [datascript.impl.entity :as de]
-            [logseq.common.config :as common-config]
             [logseq.common.util :as common-util]
             [logseq.common.uuid :as common-uuid]
             [logseq.db.common.delete-blocks :as delete-blocks] ;; Load entity extensions
@@ -41,15 +40,23 @@
   (let [remove-block-temp-f (fn [m]
                               (->> (remove (fn [[k _v]] (= "block.temp" (namespace k))) m)
                                    (into {})))]
-    (map (fn [m]
-           (if (map? m)
-             (cond->
-              (remove-block-temp-f m)
-               (and (seq (:block/refs m))
-                    (every? map? (:block/refs m)))
-               (update :block/refs (fn [refs] (map remove-block-temp-f refs))))
-             m))
-         tx-data)))
+    (keep (fn [data]
+            (cond
+              (map? data)
+              (cond->
+               (remove-block-temp-f data)
+                (and (seq (:block/refs data))
+                     (every? map? (:block/refs data)))
+                (update :block/refs (fn [refs] (map remove-block-temp-f refs))))
+              (and (vector? data)
+                   (contains? #{:db/add :db/retract} (first data))
+                   (> (count data) 2)
+                   (keyword? (nth data 2))
+                   (= "block.temp" (namespace (nth data 2))))
+              nil
+              :else
+              data))
+          tx-data)))
 
 (defn assert-no-entities
   [tx-data]
@@ -244,7 +251,7 @@
       (d/entity db [:block/name (common-util/page-name-sanity-lc page-name)]))))
 
 (defn get-page
-  "Get a page given its unsanitized name"
+  "Get a page given its unsanitized name or uuid"
   [db page-id-name-or-uuid]
   (when db
     (if (number? page-id-name-or-uuid)
@@ -254,16 +261,17 @@
         (d/entity db [:block/uuid id])
         (d/entity db (get-first-page-by-name db (name page-id-name-or-uuid)))))))
 
-(defn get-built-in-page
-  [db title]
+(defn get-journal-page
+  "Get a journal page given its unsanitized name.
+   This will be useful for DB graphs later as we can switch to a different lookup
+   approach for journals e.g. like get-built-in-page"
+  [db page-name]
   (when db
-    (let [id (common-uuid/gen-uuid :builtin-block-uuid title)]
-      (d/entity db [:block/uuid id]))))
+    (d/entity db (get-first-page-by-name db page-name))))
 
-(defn library?
-  [page]
-  (and (built-in? page)
-       (= common-config/library-page-name (:block/title page))))
+(def get-built-in-page db-db/get-built-in-page)
+
+(def library? db-db/library?)
 
 (defn get-case-page
   "Case sensitive version of get-page. For use with DB graphs"
@@ -514,7 +522,7 @@
   (when db (get-key-value db :logseq.kv/remote-schema-version)))
 
 (def get-all-properties db-db/get-all-properties)
-(def get-class-extends db-db/get-class-extends)
+(def get-class-extends db-class/get-class-extends)
 (def get-classes-parents db-db/get-classes-parents)
 (def get-title-with-parents db-db/get-title-with-parents)
 (def class-instance? db-db/class-instance?)

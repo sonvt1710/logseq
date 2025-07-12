@@ -262,7 +262,7 @@
   [block property]
   (let [opts {:exit-edit? false}
         block (db/sub-block (:db/id block))]
-    [:div.p-4.flex.flex-col.gap-4.w-64
+    [:div.p-4.hidden.sm:flex.flex-col.gap-4.w-64
      [:div.mb-4
       [:div.flex.flex-row.items-center.gap-1
        [:div.w-4
@@ -367,16 +367,16 @@
           (when d
             (let [journal (date/js-date->journal-title d)]
               (p/do!
-               (when-not (db/get-page journal)
+               (when-not (model/get-journal-page journal)
                  (page-handler/<create! journal {:redirect? false}))
                (when (fn? on-change)
-                 (let [value (if datetime? (tc/to-long d) (db/get-page journal))]
+                 (let [value (if datetime? (tc/to-long d) (model/get-journal-page journal))]
                    (on-change value)))
                (when-not datetime?
                  (shui/popup-hide! id)
                  (ui/hide-popups-until-preview-popup!))))))]
     [:div.flex.flex-row.gap-2
-     [:div.flex.flex-col
+     [:div.flex.flex-1.items-center
       (ui/nlp-calendar
        (cond->
         {:initial-focus true
@@ -388,7 +388,8 @@
          :on-day-click select-handler!}
          initial-month
          (assoc :default-month initial-month)))]
-     (shui/separator {:orientation "vertical"})
+     [:div.hidden.sm:initial
+      (shui/separator {:orientation "vertical"})]
      (repeat-setting block property)]))
 
 (rum/defc overdue
@@ -679,13 +680,19 @@
         property-type (:logseq.property/type property)
         nodes (cond
                 extends-property?
-                (let [;; Disallows cyclic hierarchies
+                (let [extends (->> (mapcat (fn [e] (ldb/get-class-extends e)) (:logseq.property.class/extends block))
+                                   distinct)
+                      ;; Disallows cyclic hierarchies
                       exclude-ids (-> (set (map (fn [id] (:block/uuid (db/entity id))) children-pages))
-                                      (conj (:block/uuid block))) ; break cycle
+                                      (conj (:block/uuid block)) ; break cycle
+                                      ;; hide parent extends for existing values
+                                      (set/union (set (map :block/uuid extends))))
                       options (if (ldb/class? block)
                                 (model/get-all-classes repo)
                                 result)
-                      excluded-options (remove (fn [e] (contains? exclude-ids (:block/uuid e))) options)]
+
+                      excluded-options (->> options
+                                            (remove (fn [e] (contains? exclude-ids (:block/uuid e)))))]
                   excluded-options)
 
                 (contains? #{:class :property} property-type)
@@ -779,7 +786,7 @@
                                               "Set alias"
                                               :else
                                               (str "Set " (:block/title property)))
-                 :show-new-when-not-exact-match? (if (or (and extends-property? (contains? (set children-pages) (:db/id block)))
+                 :show-new-when-not-exact-match? (if (or extends-property?
                                                          ;; Don't allow creating private tags
                                                          (and (= :block/tags (:db/ident property))
                                                               (seq (set/intersection (set (map :db/ident classes'))
@@ -875,13 +882,6 @@
     (hooks/use-effect!
      (fn []
        (cond
-         (and extends-property? (not (ldb/class? block))
-              (ldb/internal-page? block))
-         (p/let [result (db-async/<get-tag-pages repo (:db/id (db/entity :logseq.class/Page)))
-                 result' (->> result
-                              (remove ldb/built-in?))]
-           (set-result-and-initial-choices! result'))
-
          extends-property?
          nil
 
@@ -1265,7 +1265,10 @@
                       (set-value! (util/evalue e))
                       (reset! *value (util/evalue e)))
          :on-blur (fn [_e]
-                    (set-property-value! value))
+                    (p/do!
+                     (set-property-value! value)
+                     (when (not= value (db-property/property-value-content (db/entity (:db/id value-block))))
+                       (set-value! (db-property/property-value-content value-block)))))
          :on-key-down (fn [e]
                         (let [input (rum/deref *input-ref)
                               pos (cursor/pos input)
@@ -1494,7 +1497,6 @@
                      "Fix it!")]
        (let [empty-value? (when (coll? v) (= :logseq.property/empty-placeholder (:db/ident (first v))))
              closed-values? (seq (:property/closed-values property))
-             property-ident (:db/ident property)
              value-cp [:div.property-value-inner
                        {:data-type type
                         :class (str (when empty-value? "empty-value")
@@ -1507,30 +1509,11 @@
                          (multiple-values block property opts)
 
                          :else
-                         (let [extends? (= property-ident :logseq.property.class/extends)
-                               value-cp (property-scalar-value block property v
-                                                               (merge
-                                                                opts
-                                                                {:editor-id editor-id
-                                                                 :dom-id dom-id}))
-                               page-ancestors (when extends?
-                                                (let [ancestor-pages (loop [parents [block]]
-                                                                       (if-let [parent (:logseq.property.class/extends (last parents))]
-                                                                         (when-not (contains? (set parents) parent)
-                                                                           (recur (conj parents parent)))
-                                                                         parents))]
-                                                  (->> (reverse ancestor-pages)
-                                                       (remove (fn [e] (= (:db/id block) (:db/id e))))
-                                                       butlast)))]
-                           (if (seq page-ancestors)
-                             [:div.flex.flex-1.items-center.gap-1
-                              (interpose [:span.opacity-50.text-sm " > "]
-                                         (concat
-                                          (map (fn [{title :block/title :as ancestor}]
-                                                 [:a.whitespace-nowrap {:on-click #(route-handler/redirect-to-page! (:block/uuid ancestor))} title])
-                                               page-ancestors)
-                                          [value-cp]))]
-                             value-cp)))]]
+                         (property-scalar-value block property v
+                                                (merge
+                                                 opts
+                                                 {:editor-id editor-id
+                                                  :dom-id dom-id})))]]
          (if show-tooltip?
            (shui/tooltip-provider
             (shui/tooltip
